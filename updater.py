@@ -4,7 +4,7 @@ Reads report_out.html + subhub_latest.json, diffs milestones,
 detects new closes from dce_cache.json, writes updated HTML.
 """
 
-import os, re, json, sys
+import os, re, json, sys, csv, io, urllib.request
 from datetime import datetime
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +25,43 @@ ALL_MILESTONE_LABELS = [
 ]
 
 SUBHUB_BASE_URL = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-texas/projects/detail/'
+
+# ── Closer-tracking sheet ──────────────────────────────────────────────────────
+# The source of truth for which SubHub projects are real closed deals.
+# A SubHub project is added to / kept in the report only if its customer name
+# matches an entry in this sheet.
+CLOSER_SHEET_ID  = '1U-1q0c9WzEbhfRkhMfaLDrp7TYKj0NFYzQeJ_ssB0Oc'
+CLOSER_SHEET_GID = '1763606603'
+
+def fetch_closer_keys():
+    """Return a set of (first, last) lowercase tuples from 'Their Full Name' column."""
+    url = f'https://docs.google.com/spreadsheets/d/{CLOSER_SHEET_ID}/gviz/tq?tqx=out:csv&gid={CLOSER_SHEET_GID}'
+    try:
+        with urllib.request.urlopen(url, timeout=30) as r:
+            text = r.read().decode('utf-8', errors='replace')
+    except Exception as e:
+        print(f'  WARNING: could not fetch closer sheet ({e}); filter disabled this run.')
+        return None
+    rows = list(csv.reader(io.StringIO(text)))
+    keys = set()
+    for r in rows[1:]:
+        if len(r) > 1 and r[1].strip():
+            parts = [p for p in re.split(r'\s+', r[1].strip().lower()) if p and p != '-']
+            if parts:
+                keys.add((parts[0], parts[-1]))
+    return keys
+
+def in_closer_set(name, closer_keys):
+    """True if the given customer name matches a closer-sheet entry by first+last token."""
+    if closer_keys is None:
+        return True   # filter disabled — keep everything
+    parts = [p for p in re.split(r'\s+', (name or '').strip().lower()) if p and p != '-']
+    if not parts:
+        return False
+    first, last = parts[0], parts[-1]
+    return (first, last) in closer_keys
+
+
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -231,6 +268,18 @@ def update():
     sh_idx      = build_subhub_index(subhub_data)
     print(f'  {len(sh_idx)} SubHub projects')
 
+    print('Loading closer-tracking sheet…')
+    closer_keys = fetch_closer_keys()
+    if closer_keys is not None:
+        print(f'  {len(closer_keys)} closed deals on the sheet')
+        # Drop existing rows whose customer is no longer (or was never) a real closed deal
+        before = len(raw_rows)
+        raw_rows = [r for r in raw_rows
+                    if in_closer_set(r.get('db_name') or r.get('input_name', ''), closer_keys)]
+        dropped = before - len(raw_rows)
+        if dropped:
+            print(f'  Dropped {dropped} non-closer row(s)')
+
     print('Loading DCE cache…')
     dce_by_phone, dce_by_name, dce_items = load_dce_cache()
     print(f'  {len(dce_items)} DCE entries')
@@ -306,6 +355,9 @@ def update():
     for dce_entry in dce_items:
         dce_name = normalize_name(dce_entry.get('contact_name', ''))
         if not dce_name or dce_name in existing_names:
+            continue
+        # Skip leads that aren't actually closed deals yet
+        if not in_closer_set(dce_entry.get('contact_name',''), closer_keys):
             continue
 
         # Try to find in SubHub by name
