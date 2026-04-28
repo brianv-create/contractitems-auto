@@ -1,0 +1,57 @@
+name: Update ContractItems Report
+
+on:
+  schedule:
+    # 9:00 AM CST = 15:00 UTC   (standard time)
+    # 9:00 AM CDT = 14:00 UTC   (daylight saving — Texas uses CDT Mar–Nov)
+    - cron: '25 14 * * *'  # 9:25 AM CDT — off-peak (more reliable than top of hour)
+    - cron: '25 20 * * *'  # 3:25 PM CDT — off-peak
+  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+
+jobs:
+  update-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # needed to commit updated report_out.html back
+
+    steps:
+      # ── 1. Check out the repo ─────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 2. Set up Python ──────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. Install dependencies ───────────────────────────────────────────
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Run SubHub scraper → writes subhub_latest.json ─────────────────
+      - name: Scrape SubHub milestones
+        env:
+          SUBHUB_TOKEN: ${{ secrets.SUBHUB_TOKEN }}
+        run: python scraper.py
+
+      # ── 5. Run updater → patches report_out.html ─────────────────────────
+      - name: Update report HTML
+        run: python updater.py
+
+      # ── 6. Commit and push the updated report ─────────────────────────────
+      - name: Commit updated report
+        run: |
+          git config user.name  "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+          git add report_out.html subhub_latest.json known_pids.json
+          # Only commit if something changed
+          if ! git diff --cached --quiet; then
+            DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
+            git commit -m "Auto-update report — $DATE"
+            git push
+          else
+            echo "No changes — nothing to commit."
+          fi
