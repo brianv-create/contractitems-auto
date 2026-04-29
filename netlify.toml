@@ -1,0 +1,5 @@
+# Disable browser caching of report HTML so live updates appear immediately on hard-refresh.
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
