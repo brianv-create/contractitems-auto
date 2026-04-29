@@ -33,22 +33,36 @@ SUBHUB_BASE_URL = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-tex
 CLOSER_SHEET_ID  = '1U-1q0c9WzEbhfRkhMfaLDrp7TYKj0NFYzQeJ_ssB0Oc'
 CLOSER_SHEET_GID = '1763606603'
 
+# Only deals closed in this year are kept; older closes are filtered out.
+CLOSER_REQUIRED_YEAR = '2026'
+
 def fetch_closer_keys():
-    """Return a set of (first, last) lowercase tuples from 'Their Full Name' column."""
+    """Return set of (first, last) lowercase tuples from 'Their Full Name' column,
+    restricted to rows whose Timestamp (column 0) is in CLOSER_REQUIRED_YEAR."""
     url = f'https://docs.google.com/spreadsheets/d/{CLOSER_SHEET_ID}/gviz/tq?tqx=out:csv&gid={CLOSER_SHEET_GID}'
     try:
         with urllib.request.urlopen(url, timeout=30) as r:
             text = r.read().decode('utf-8', errors='replace')
     except Exception as e:
-        print(f'  WARNING: could not fetch closer sheet ({e}); filter disabled this run.')
+        print(f'  WARNING: could not fetch closer sheet ({e}); filter disabled.')
         return None
     rows = list(csv.reader(io.StringIO(text)))
     keys = set()
+    skipped_year = 0
     for r in rows[1:]:
-        if len(r) > 1 and r[1].strip():
-            parts = [p for p in re.split(r'\s+', r[1].strip().lower()) if p and p != '-']
-            if parts:
-                keys.add((parts[0], parts[-1]))
+        if len(r) < 2 or not r[1].strip():
+            continue
+        ts = (r[0] or '').strip()
+        m = re.search(r'/(\d{4})\b', ts)
+        year = m.group(1) if m else ''
+        if year != CLOSER_REQUIRED_YEAR:
+            skipped_year += 1
+            continue
+        parts = [p for p in re.split(r'\s+', r[1].strip().lower()) if p and p != '-']
+        if parts:
+            keys.add((parts[0], parts[-1]))
+    if skipped_year:
+        print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
     return keys
 
 def in_closer_set(name, closer_keys):
