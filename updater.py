@@ -66,14 +66,25 @@ def fetch_closer_keys():
     return keys
 
 def in_closer_set(name, closer_keys):
-    """True if the given customer name matches a closer-sheet entry by first+last token."""
+    """True if name matches a closer-sheet entry by first+last token.
+    Strips parenthetical suffixes ('Jessica Mulkey (Michael Mulkey)' -> 'Jessica Mulkey'),
+    trailing Referral/Ref/Jr-style notations, and stray punctuation so the filter
+    doesn't drop legit deals with messy names."""
     if closer_keys is None:
-        return True   # filter disabled — keep everything
-    parts = [p for p in re.split(r'\s+', (name or '').strip().lower()) if p and p != '-']
+        return True
+    n = (name or '').strip()
+    n = re.sub(r'\([^)]*\)', ' ', n)            # drop ()-content
+    n = re.sub(r'[\-/,]', ' ', n)                # treat dashes, slashes, commas as space
+    NOISE = {'referral', 'ref', 'jr', 'sr', 'ii', 'iii', 'iv'}
+    parts = [re.sub(r'[^a-z]', '', p) for p in n.lower().split()]
+    parts = [p for p in parts if p and p not in NOISE]
     if not parts:
         return False
-    first, last = parts[0], parts[-1]
-    return (first, last) in closer_keys
+    candidates = {(parts[0], parts[-1])}
+    if len(parts) >= 2:
+        candidates.add((parts[0], parts[1]))      # first + second word
+        candidates.add((parts[-2], parts[-1]))    # last two words
+    return any(c in closer_keys for c in candidates)
 
 
 
@@ -92,7 +103,10 @@ def compute_flag(milestones):
     statuses = [milestones.get(lbl, '') for lbl in FLAG_MILESTONES]
     if any(parse_status(s).upper() == 'REJECTED' for s in statuses):
         return 'rejected'
-    if all(parse_status(s).upper() == 'APPROVED' for s in statuses):
+    # Treat empty / missing milestones as N/A (not blocking 'approved'). A deal
+    # is approved when every recorded contract-item milestone is APPROVED.
+    non_empty = [s for s in statuses if s and parse_status(s).strip()]
+    if non_empty and all(parse_status(s).upper() == 'APPROVED' for s in non_empty):
         return 'approved'
     return 'pending'
 
