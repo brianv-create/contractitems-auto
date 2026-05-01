@@ -443,6 +443,10 @@ const STATUS_OPTIONS = [
 const ID_TO_ROW = {};
 RAW_ROWS.forEach(r => { ID_TO_ROW[r.id] = r; });
 function rowById(id) { return ID_TO_ROW[id]; }
+// Timestamp the page was generated. Edits with .ts >= BUILD_TS are
+// newer than the SubHub data and override raw status (including
+// APPROVED/Rejected). Older edits are treated as stale.
+const BUILD_TS = 1777654273254;
 
 const STORAGE_KEY    = 'subhub_edits_v2';
 const CANCEL_KEY     = 'subhub_cancelled_v2';
@@ -573,9 +577,15 @@ function getMilestone(rowId, label) {
   const key = rowId+'|'+label;
   const _r = rowById(rowId);
   const raw = (_r && _r.milestones[label]) || '';
-  // SubHub-confirmed statuses (APPROVED / Rejected) always win over stale Firebase edits
-  if (raw === 'APPROVED' || raw === 'Rejected') return raw;
-  if (edits[key] !== undefined) return typeof edits[key]==='object' ? edits[key].value : edits[key];
+  const e = edits[key];
+  if (e !== undefined) {
+    // An edit newer than the build (BUILD_TS) is a deliberate manual override
+    // and wins over raw — even if raw is APPROVED/Rejected. Older edits are
+    // assumed stale and yield to the freshly-imported SubHub status.
+    const eTs = (typeof e === 'object' && e.ts) ? e.ts : 0;
+    if (eTs >= BUILD_TS) return typeof e === 'object' ? e.value : e;
+    if (raw !== 'APPROVED' && raw !== 'Rejected') return typeof e === 'object' ? e.value : e;
+  }
   return raw;
 }
 function getOriginal(rowId, label) { const _r = rowById(rowId); return (_r && _r.milestones[label]) || 'Not Yet'; }
@@ -1613,4 +1623,13 @@ window.addEventListener('resize', syncFrozenHeader);
 <!-- History drawer -->
 <div id="history-overlay" onclick="closeHistory()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1500"></div>
 <div id="history-drawer" style="position:fixed;top:0;right:0;width:480px;max-width:95vw;height:100vh;background:#fff;box-shadow:-4px 0 24px rgba(0,0,0,.18);z-index:1501;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .25s ease;pointer-events:none;visibility:hidden">
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#1a3a
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;background:#1a3a4a;color:#fff">
+    <span style="font-size:15px;font-weight:700">&#128337; Change History</span>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span id="history-user-display" style="font-size:11px;opacity:.8;cursor:pointer" onclick="promptSetUser()" title="Change your name"></span>
+      <button onclick="closeHistory()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1">&#10005;</button>
+    </div>
+  </div>
+  <div id="history-body" style="flex:1;overflow-y:auto;padding:16px 20px;font-size:12px"></div>
+</div>
+</body></html>

@@ -467,6 +467,15 @@ def update():
     inject_line(lines, raw_idx, 'const RAW_ROWS = ', raw_rows)
     inject_line(lines, cl_idx,  'const CHANGELOG = ', changelog)
 
+    # Refresh BUILD_TS so user edits made before this build are treated as
+    # superseded by any APPROVED/Rejected status that just arrived from SubHub.
+    import time as _time
+    _build_ts = int(_time.time() * 1000)
+    for i, line in enumerate(lines):
+        if line.strip().startswith('const BUILD_TS ='):
+            lines[i] = f'const BUILD_TS = {_build_ts};\n'
+            break
+
     save_html(lines)
     print(f'\nSaved report_out.html — {len(raw_rows)} rows, '
           f'{total_milestone_changes} changes, {new_deals_added} new deals.')
