@@ -65,13 +65,10 @@ def fetch_closer_keys():
         print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
     return keys
 
-def in_closer_set(name, closer_keys):
-    """True if name matches a closer-sheet entry by first+last token.
-    Strips parenthetical suffixes ('Jessica Mulkey (Michael Mulkey)' -> 'Jessica Mulkey'),
-    trailing Referral/Ref/Jr-style notations, and stray punctuation so the filter
-    doesn't drop legit deals with messy names."""
-    if closer_keys is None:
-        return True
+def name_candidates(name):
+    """Return the set of (first, last)-style tuples we'd consider a match for
+    this customer name. Strips parenthetical suffixes, Jr/Sr/Ref noise, and
+    punctuation so messy names still match cleanly."""
     n = (name or '').strip()
     n = re.sub(r'\([^)]*\)', ' ', n)            # drop ()-content
     n = re.sub(r'[\-/,]', ' ', n)                # treat dashes, slashes, commas as space
@@ -79,12 +76,18 @@ def in_closer_set(name, closer_keys):
     parts = [re.sub(r'[^a-z]', '', p) for p in n.lower().split()]
     parts = [p for p in parts if p and p not in NOISE]
     if not parts:
-        return False
-    candidates = {(parts[0], parts[-1])}
+        return set()
+    cands = {(parts[0], parts[-1])}
     if len(parts) >= 2:
-        candidates.add((parts[0], parts[1]))      # first + second word
-        candidates.add((parts[-2], parts[-1]))    # last two words
-    return any(c in closer_keys for c in candidates)
+        cands.add((parts[0], parts[1]))      # first + second word
+        cands.add((parts[-2], parts[-1]))    # last two words
+    return cands
+
+def in_closer_set(name, closer_keys):
+    """True if name matches a closer-sheet entry by first+last token."""
+    if closer_keys is None:
+        return True
+    return bool(name_candidates(name) & closer_keys)
 
 
 
@@ -441,7 +444,60 @@ def update():
         new_deals_added += 1
         print(f'  + New deal: {new_row["input_name"]} (pid={sh_pid})')
 
-    print(f'  {new_deals_added} new deals added')
+    print(f'  {new_deals_added} new deals added (DCE)')
+
+    # ── 2b. Detect new closes via closer sheet → SubHub directly ──────────────
+    # Catches deals that are on the closer sheet + in SubHub but NOT yet in the
+    # DCE cache (DCE export is manual + bursty, so it's often days stale). The
+    # row goes in with empty DCE/GHL links; the next DCE refresh's enrichment
+    # block fills those in.
+    closer_added = 0
+    if closer_keys:
+        # Index existing rows by candidate tuples so we can dedupe
+        existing_candidates = set()
+        for row in raw_rows:
+            existing_candidates |= name_candidates(
+                row.get('db_name') or row.get('input_name', ''))
+
+        # Reverse SubHub index: candidate tuple -> pid
+        sh_candidate_idx = {}
+        for pid_str, proj in sh_idx.items():
+            for c in name_candidates(proj.get('customer_name', '')):
+                sh_candidate_idx.setdefault(c, pid_str)
+
+        print('Discovering new closes via closer sheet -> SubHub...')
+        for closer_key in closer_keys:
+            if closer_key in existing_candidates:
+                continue
+            sh_pid = sh_candidate_idx.get(closer_key)
+            if not sh_pid:
+                continue   # not in SubHub yet — silent skip
+            if sh_pid in known_pids:
+                continue   # already added by DCE pass under a different name spelling
+
+            proj    = sh_idx[sh_pid]
+            row_id  = len(raw_rows)
+            new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
+            raw_rows.append(new_row)
+            existing_candidates |= name_candidates(
+                new_row.get('db_name') or new_row.get('input_name', ''))
+            known_pids[sh_pid] = new_row
+
+            changelog.append({
+                'id':      row_id,
+                'pid':     new_row['pid'],
+                'name':    new_row['input_name'],
+                'closer':  new_row['closer'],
+                'ts':      ts + 'T00:00:00.000Z',
+                'changes': [{'field': 'NEW_DEAL', 'from': None, 'to': new_row['flag']}],
+                'note':    f'Auto-added from closer sheet {ts}',
+            })
+            closer_added += 1
+            print(f'  + New deal (closer sheet): {new_row["input_name"]} (pid={sh_pid})')
+
+        print(f'  {closer_added} new deals added (closer sheet)')
+
+    new_deals_added += closer_added
 
     # ── 3. Save known_pids ────────────────────────────────────────────────────
     save_known_pids(set(str(r['pid']) for r in raw_rows))
