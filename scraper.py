@@ -73,6 +73,16 @@ def scrape():
 
     print(f'  {len(projects)} projects found')
 
+    # One-shot debug: log the top-level keys of the first project so we can
+    # spot which field carries the lead/URL id used by SubHub's UI.
+    if projects:
+        sample = projects[0]
+        if isinstance(sample, dict):
+            print(f'  [debug] first project keys: {sorted(sample.keys())}')
+            for cand in ('id', 'lead_id', 'leadId', 'proposal_id', 'project_id'):
+                if cand in sample:
+                    print(f'  [debug] {cand} = {sample[cand]!r}')
+
     # --- Fetch milestones per project ---
     results = []
     errors  = []
@@ -114,9 +124,17 @@ def scrape():
 
 def build_record(proj, headers):
     proposal_id = proj.get('proposal_id')
+    # Try a few likely names — SubHub's projects payload sometimes nests this.
+    lead_id = (
+        proj.get('lead_id')
+        or proj.get('leadId')
+        or (proj.get('lead') or {}).get('id')
+        or proj.get('id')   # last-resort fallback so URLs at least don't break
+    )
     base = {
         'project_id':   proj.get('id'),
         'proposal_id':  proposal_id,
+        'lead_id':      lead_id,
         'customer_name': proj.get('project_name', ''),
         'address': ', '.join(filter(None, [
             proj.get('street',''), proj.get('city',''),

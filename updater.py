@@ -24,7 +24,18 @@ ALL_MILESTONE_LABELS = [
     'Install Photo Approval', 'M1 Approval Status', 'M2 Approval Status',
 ]
 
-SUBHUB_BASE_URL = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-texas/projects/detail/'
+SUBHUB_BASE   = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-texas'
+# Legacy URL pattern (still works as fallback when we don't have a lead id)
+SUBHUB_BASE_URL = SUBHUB_BASE + '/projects/detail/'
+
+def subhub_url(lead_id, project_id):
+    """Prefer the new /<lead_id>/proposals URL when we have a lead id; otherwise
+    fall back to the legacy /projects/detail/<project_id> URL."""
+    if lead_id:
+        return f'{SUBHUB_BASE}/{lead_id}/proposals'
+    if project_id:
+        return f'{SUBHUB_BASE_URL}{project_id}'
+    return ''
 
 # ── Closer-tracking sheet ──────────────────────────────────────────────────────
 # The source of truth for which SubHub projects are real closed deals.
@@ -262,16 +273,18 @@ def build_new_row(proj, dce_by_phone, dce_by_name, row_id):
 
     pid      = str(proj.get('project_id', ''))
     name     = str(proj.get('customer_name', '') or '').strip()
+    lead_id  = proj.get('lead_id') or ''
 
     return {
         'id':               row_id,
         'pid':              int(pid) if pid.isdigit() else pid,
+        'lead_id':          lead_id,
         'input_name':       name,
         'db_name':          name,
         'email':            '',
         'closer':           closer,
         'month':            today_month(),
-        'url':              SUBHUB_BASE_URL + pid,
+        'url':              subhub_url(lead_id, pid),
         'flag':             compute_flag(milestones),
         'milestones':       milestones,
         'dce_url':          dce_url,
@@ -345,12 +358,24 @@ def update():
 
     # ── 1. Diff milestones for existing rows ──────────────────────────────────
     print('Diffing milestones…')
+    url_upgrades = 0
     for row in raw_rows:
         pid_str = str(row['pid'])
         if pid_str not in sh_idx:
             continue
 
         proj = sh_idx[pid_str]
+
+        # Backfill lead_id + upgrade legacy URL to the new /<lead_id>/proposals
+        # form on every pass — idempotent once the URL is in the new shape.
+        sh_lead = proj.get('lead_id') or ''
+        if sh_lead and not row.get('lead_id'):
+            row['lead_id'] = sh_lead
+        new_url = subhub_url(row.get('lead_id') or sh_lead, pid_str)
+        if new_url and new_url != row.get('url'):
+            row['url'] = new_url
+            url_upgrades += 1
+
         new_milestones, new_reasons = milestones_from_subhub(proj)
         old_milestones = row.get('milestones', {})
 
@@ -388,6 +413,8 @@ def update():
 
     print(f'  {total_milestone_changes} milestone changes recorded')
     print(f'  {total_link_enrichments} DCE/GHL links enriched')
+    if url_upgrades:
+        print(f'  {url_upgrades} SubHub URL(s) upgraded to /<lead_id>/proposals form')
 
     # ── 2. Detect new closes from DCE cache ───────────────────────────────────
     print('Checking for new closes from DCE cache…')
