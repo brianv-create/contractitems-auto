@@ -49,4 +49,5 @@ jobs:
             git commit -m "Auto-update report — $DATE"
             git push
           else
-           
+            echo "No changes — nothing to commit."
+          fi
