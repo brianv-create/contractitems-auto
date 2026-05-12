@@ -1,12 +1,8 @@
 name: Update ContractItems Report
 
 on:
-  schedule:
-    # 9:00 AM CST = 15:00 UTC   (standard time)
-    # 9:00 AM CDT = 14:00 UTC   (daylight saving — Texas uses CDT Mar–Nov)
-    - cron: '25 14 * * *'  # 9:25 AM CDT — off-peak (more reliable than top of hour)
-    - cron: '25 20 * * *'  # 3:25 PM CDT — off-peak
-  workflow_dispatch:        # allow manual trigger from GitHub Actions UI
+  workflow_dispatch:        # manual trigger only — scheduled runs disabled to
+                            # avoid racing local edits. Trigger via Actions UI.
 
 jobs:
   update-report:
@@ -53,5 +49,4 @@ jobs:
             git commit -m "Auto-update report — $DATE"
             git push
           else
-            echo "No changes — nothing to commit."
-          fi
+           
