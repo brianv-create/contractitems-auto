@@ -30,8 +30,8 @@ SUBHUB_BASE_URL = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-tex
 # The source of truth for which SubHub projects are real closed deals.
 # A SubHub project is added to / kept in the report only if its customer name
 # matches an entry in this sheet.
-CLOSER_SHEET_ID  = '1U-1q0c9WzEbhfRkhMfaLDrp7TYKj0NFYzQeJ_ssB0Oc'
-CLOSER_SHEET_GID = '1763606603'
+CLOSER_SHEET_ID  = '1q58PO-UbDtQLEGe4bVAvLbAovYknh7d4Fu2Z2xdRulA'
+CLOSER_SHEET_GID = '1352249267'   # tab: "Closed All"
 
 # Only deals closed in this year are kept; older closes are filtered out.
 CLOSER_REQUIRED_YEAR = '2026'
