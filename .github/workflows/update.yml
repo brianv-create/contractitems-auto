@@ -42,7 +42,7 @@ jobs:
         run: |
           git config user.name  "GitHub Actions Bot"
           git config user.email "actions@github.com"
-          git add report_out.html subhub_latest.json known_pids.json
+          git add dashboard.html report_out.html subhub_latest.json known_pids.json
           # Only commit if something changed
           if ! git diff --cached --quiet; then
             DATE=$(date -u '+%Y-%m-%d %H:%M UTC')
