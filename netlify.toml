@@ -3,3 +3,10 @@
   for = "/*.html"
   [headers.values]
     Cache-Control = "public, max-age=0, must-revalidate"
+
+# Legacy URL still works — redirect old bookmarks to the new file.
+[[redirects]]
+  from = "/report_out.html"
+  to = "/dashboard.html"
+  status = 301
+  force = true

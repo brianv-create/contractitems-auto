@@ -8,7 +8,9 @@ import os, re, json, sys, csv, io, urllib.request
 from datetime import datetime
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-REPORT_PATH  = os.path.join(SCRIPT_DIR, 'report_out.html')
+REPORT_PATH  = os.path.join(SCRIPT_DIR, 'dashboard.html')
+# Legacy filename — kept in sync so old bookmarks at /report_out.html still work.
+REPORT_LEGACY_PATH = os.path.join(SCRIPT_DIR, 'report_out.html')
 SUBHUB_PATH  = os.path.join(SCRIPT_DIR, 'subhub_latest.json')
 DCE_CACHE    = os.path.join(SCRIPT_DIR, 'dce_cache.json')
 KNOWN_PIDS   = os.path.join(SCRIPT_DIR, 'known_pids.json')
@@ -146,6 +148,9 @@ def load_html():
 
 def save_html(lines):
     with open(REPORT_PATH, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    # Also write the legacy file so /report_out.html keeps working.
+    with open(REPORT_LEGACY_PATH, 'w', encoding='utf-8') as f:
         f.writelines(lines)
 
 def extract_line(lines, prefix):
