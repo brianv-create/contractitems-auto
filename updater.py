@@ -298,6 +298,33 @@ def save_known_pids(pids):
     with open(KNOWN_PIDS, 'w') as f:
         json.dump(sorted(pids), f)
 
+
+def next_row_id(raw_rows):
+    """Return an id that doesn't collide with any existing row.id.
+    `len(raw_rows)` is unsafe because the closer-set filter drops rows,
+    leaving gaps — using length as the id can re-use an existing id."""
+    used = {r.get('id') for r in raw_rows}
+    nid = max((i for i in used if isinstance(i, int)), default=-1) + 1
+    while nid in used:
+        nid += 1
+    return nid
+
+def dedupe_row_ids(raw_rows):
+    """Renumber rows that share an id. Keeps the first occurrence as-is and
+    moves later duplicates to fresh ids. Returns number of rows renumbered."""
+    seen = {}
+    fixed = 0
+    for row in raw_rows:
+        rid = row.get('id')
+        if rid in seen:
+            new_id = next_row_id(raw_rows)
+            row['id'] = new_id
+            seen[new_id] = row
+            fixed += 1
+        else:
+            seen[rid] = row
+    return fixed
+
 # ── Main update ────────────────────────────────────────────────────────────────
 
 def update():
@@ -308,6 +335,12 @@ def update():
     cl_idx,  changelog = extract_line(lines, 'const CHANGELOG = ')
 
     print(f'  {len(raw_rows)} existing rows')
+
+    # One-time defensive: renumber any rows that share an id (a previous
+    # build's len()-based id assignment may have collided with existing ids).
+    dup_fixed = dedupe_row_ids(raw_rows)
+    if dup_fixed:
+        print(f'  Renumbered {dup_fixed} row(s) with duplicate id')
 
     # One-time / idempotent: normalize any GHL URLs missing '/detail/'
     ghl_fixed = 0
@@ -444,7 +477,7 @@ def update():
             continue
 
         proj    = sh_idx[sh_pid]
-        row_id  = len(raw_rows)
+        row_id  = next_row_id(raw_rows)
         new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
         raw_rows.append(new_row)
         existing_names.add(dce_name)
@@ -494,7 +527,7 @@ def update():
                 continue   # already added by DCE pass under a different name spelling
 
             proj    = sh_idx[sh_pid]
-            row_id  = len(raw_rows)
+            row_id  = next_row_id(raw_rows)
             new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
             raw_rows.append(new_row)
             existing_candidates |= name_candidates(
