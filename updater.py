@@ -8,9 +8,7 @@ import os, re, json, sys, csv, io, urllib.request
 from datetime import datetime
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
-REPORT_PATH  = os.path.join(SCRIPT_DIR, 'dashboard.html')
-# Legacy filename — kept in sync so old bookmarks at /report_out.html still work.
-REPORT_LEGACY_PATH = os.path.join(SCRIPT_DIR, 'report_out.html')
+REPORT_PATH  = os.path.join(SCRIPT_DIR, 'report_out.html')
 SUBHUB_PATH  = os.path.join(SCRIPT_DIR, 'subhub_latest.json')
 DCE_CACHE    = os.path.join(SCRIPT_DIR, 'dce_cache.json')
 KNOWN_PIDS   = os.path.join(SCRIPT_DIR, 'known_pids.json')
@@ -32,8 +30,8 @@ SUBHUB_BASE_URL = 'https://app.subcontractorhub.com/solrite-electric-llc-vpp-tex
 # The source of truth for which SubHub projects are real closed deals.
 # A SubHub project is added to / kept in the report only if its customer name
 # matches an entry in this sheet.
-CLOSER_SHEET_ID  = '1q58PO-UbDtQLEGe4bVAvLbAovYknh7d4Fu2Z2xdRulA'
-CLOSER_SHEET_GID = '1352249267'   # tab: "Closed All"
+CLOSER_SHEET_ID  = '1U-1q0c9WzEbhfRkhMfaLDrp7TYKj0NFYzQeJ_ssB0Oc'
+CLOSER_SHEET_GID = '1763606603'
 
 # Only deals closed in this year are kept; older closes are filtered out.
 CLOSER_REQUIRED_YEAR = '2026'
@@ -67,10 +65,13 @@ def fetch_closer_keys():
         print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
     return keys
 
-def name_candidates(name):
-    """Return the set of (first, last)-style tuples we'd consider a match for
-    this customer name. Strips parenthetical suffixes, Jr/Sr/Ref noise, and
-    punctuation so messy names still match cleanly."""
+def in_closer_set(name, closer_keys):
+    """True if name matches a closer-sheet entry by first+last token.
+    Strips parenthetical suffixes ('Jessica Mulkey (Michael Mulkey)' -> 'Jessica Mulkey'),
+    trailing Referral/Ref/Jr-style notations, and stray punctuation so the filter
+    doesn't drop legit deals with messy names."""
+    if closer_keys is None:
+        return True
     n = (name or '').strip()
     n = re.sub(r'\([^)]*\)', ' ', n)            # drop ()-content
     n = re.sub(r'[\-/,]', ' ', n)                # treat dashes, slashes, commas as space
@@ -78,18 +79,12 @@ def name_candidates(name):
     parts = [re.sub(r'[^a-z]', '', p) for p in n.lower().split()]
     parts = [p for p in parts if p and p not in NOISE]
     if not parts:
-        return set()
-    cands = {(parts[0], parts[-1])}
+        return False
+    candidates = {(parts[0], parts[-1])}
     if len(parts) >= 2:
-        cands.add((parts[0], parts[1]))      # first + second word
-        cands.add((parts[-2], parts[-1]))    # last two words
-    return cands
-
-def in_closer_set(name, closer_keys):
-    """True if name matches a closer-sheet entry by first+last token."""
-    if closer_keys is None:
-        return True
-    return bool(name_candidates(name) & closer_keys)
+        candidates.add((parts[0], parts[1]))      # first + second word
+        candidates.add((parts[-2], parts[-1]))    # last two words
+    return any(c in closer_keys for c in candidates)
 
 
 
@@ -119,16 +114,6 @@ def normalize_name(name):
     """Lowercase, strip extra spaces — for fuzzy matching."""
     return ' '.join(str(name or '').lower().split())
 
-def normalize_ghl_url(url):
-    """GoHighLevel contact URLs need '/detail/' between '/contacts/' and the
-    contact id, otherwise the link 404s. The DCE-side enrichment script emits
-    them without it, so we insert it here. Idempotent — won't double-up."""
-    if not url:
-        return url
-    if '/contacts/detail/' in url:
-        return url
-    return url.replace('/contacts/', '/contacts/detail/', 1)
-
 def today_month():
     now = datetime.now()
     return now.strftime('%B %Y')   # e.g. "April 2026"
@@ -146,11 +131,36 @@ def load_html():
     with open(REPORT_PATH, 'r', encoding='utf-8') as f:
         return f.readlines()
 
+def rebuild_month_dropdown(html_text, raw_rows):
+    """Replace the <select id="filter-month"> options with the distinct months present in raw_rows."""
+    months = set()
+    for r in raw_rows:
+        m = (r.get('month') or '').strip()
+        months.add(m if m else 'Unknown')
+    MN = ['January','February','March','April','May','June',
+          'July','August','September','October','November','December']
+    def _key(m):
+        if m == 'Unknown': return (9999, 99)
+        parts = m.split()
+        if len(parts) == 2 and parts[0] in MN and parts[1].isdigit():
+            return (int(parts[1]), MN.index(parts[0]))
+        return (9998, 0)
+    sorted_months = sorted(months, key=_key)
+    options = '<option value="">All Months</option>' + ''.join(
+        f'<option value="{m}">{m}</option>' for m in sorted_months
+    )
+    new_sel = f'<select id="filter-month" onchange="applyFilters()">{options}</select>'
+    return re.sub(
+        r'<select id="filter-month"[^>]*>.*?</select>',
+        new_sel,
+        html_text,
+        count=1,
+        flags=re.DOTALL
+    )
+
+
 def save_html(lines):
     with open(REPORT_PATH, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-    # Also write the legacy file so /report_out.html keeps working.
-    with open(REPORT_LEGACY_PATH, 'w', encoding='utf-8') as f:
         f.writelines(lines)
 
 def extract_line(lines, prefix):
@@ -255,7 +265,7 @@ def build_new_row(proj, dce_by_phone, dce_by_name, row_id):
     # DCE enrichment
     dce_entry = dce_by_phone.get(phone) or dce_by_name.get(normalize_name(proj.get('customer_name', ''))) or {}
     dce_url   = dce_entry.get('url', '')
-    ghl_url   = normalize_ghl_url(dce_entry.get('ghl_contact_url', ''))
+    ghl_url   = dce_entry.get('ghl_contact_url', '')
 
     closer    = str(proj.get('closer', '') or '').strip()
     city      = ''
@@ -298,33 +308,6 @@ def save_known_pids(pids):
     with open(KNOWN_PIDS, 'w') as f:
         json.dump(sorted(pids), f)
 
-
-def next_row_id(raw_rows):
-    """Return an id that doesn't collide with any existing row.id.
-    `len(raw_rows)` is unsafe because the closer-set filter drops rows,
-    leaving gaps — using length as the id can re-use an existing id."""
-    used = {r.get('id') for r in raw_rows}
-    nid = max((i for i in used if isinstance(i, int)), default=-1) + 1
-    while nid in used:
-        nid += 1
-    return nid
-
-def dedupe_row_ids(raw_rows):
-    """Renumber rows that share an id. Keeps the first occurrence as-is and
-    moves later duplicates to fresh ids. Returns number of rows renumbered."""
-    seen = {}
-    fixed = 0
-    for row in raw_rows:
-        rid = row.get('id')
-        if rid in seen:
-            new_id = next_row_id(raw_rows)
-            row['id'] = new_id
-            seen[new_id] = row
-            fixed += 1
-        else:
-            seen[rid] = row
-    return fixed
-
 # ── Main update ────────────────────────────────────────────────────────────────
 
 def update():
@@ -335,23 +318,6 @@ def update():
     cl_idx,  changelog = extract_line(lines, 'const CHANGELOG = ')
 
     print(f'  {len(raw_rows)} existing rows')
-
-    # One-time defensive: renumber any rows that share an id (a previous
-    # build's len()-based id assignment may have collided with existing ids).
-    dup_fixed = dedupe_row_ids(raw_rows)
-    if dup_fixed:
-        print(f'  Renumbered {dup_fixed} row(s) with duplicate id')
-
-    # One-time / idempotent: normalize any GHL URLs missing '/detail/'
-    ghl_fixed = 0
-    for row in raw_rows:
-        if row.get('ghl_url'):
-            new_url = normalize_ghl_url(row['ghl_url'])
-            if new_url != row['ghl_url']:
-                row['ghl_url'] = new_url
-                ghl_fixed += 1
-    if ghl_fixed:
-        print(f'  Fixed {ghl_fixed} GHL URL(s) (added /detail/)')
 
     print('Loading SubHub data…')
     subhub_data = load_subhub()
@@ -383,23 +349,12 @@ def update():
 
     # ── 1. Diff milestones for existing rows ──────────────────────────────────
     print('Diffing milestones…')
-    url_upgrades = 0
     for row in raw_rows:
         pid_str = str(row['pid'])
         if pid_str not in sh_idx:
             continue
 
         proj = sh_idx[pid_str]
-
-        # Force the URL back to legacy /projects/detail/<pid> in case earlier
-        # builds wrote the experimental /<id>/proposals form.
-        legacy_url = SUBHUB_BASE_URL + pid_str
-        if row.get('url') != legacy_url:
-            row['url'] = legacy_url
-            url_upgrades += 1
-        if 'lead_id' in row:
-            row.pop('lead_id', None)
-
         new_milestones, new_reasons = milestones_from_subhub(proj)
         old_milestones = row.get('milestones', {})
 
@@ -433,12 +388,10 @@ def update():
                     row['dce_url'] = dce_entry['url']
                     total_link_enrichments += 1
                 if not row.get('ghl_url') and dce_entry.get('ghl_contact_url'):
-                    row['ghl_url'] = normalize_ghl_url(dce_entry['ghl_contact_url'])
+                    row['ghl_url'] = dce_entry['ghl_contact_url']
 
     print(f'  {total_milestone_changes} milestone changes recorded')
     print(f'  {total_link_enrichments} DCE/GHL links enriched')
-    if url_upgrades:
-        print(f'  {url_upgrades} SubHub URL(s) reset to legacy /projects/detail form')
 
     # ── 2. Detect new closes from DCE cache ───────────────────────────────────
     print('Checking for new closes from DCE cache…')
@@ -477,7 +430,7 @@ def update():
             continue
 
         proj    = sh_idx[sh_pid]
-        row_id  = next_row_id(raw_rows)
+        row_id  = len(raw_rows)
         new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
         raw_rows.append(new_row)
         existing_names.add(dce_name)
@@ -495,60 +448,7 @@ def update():
         new_deals_added += 1
         print(f'  + New deal: {new_row["input_name"]} (pid={sh_pid})')
 
-    print(f'  {new_deals_added} new deals added (DCE)')
-
-    # ── 2b. Detect new closes via closer sheet → SubHub directly ──────────────
-    # Catches deals that are on the closer sheet + in SubHub but NOT yet in the
-    # DCE cache (DCE export is manual + bursty, so it's often days stale). The
-    # row goes in with empty DCE/GHL links; the next DCE refresh's enrichment
-    # block fills those in.
-    closer_added = 0
-    if closer_keys:
-        # Index existing rows by candidate tuples so we can dedupe
-        existing_candidates = set()
-        for row in raw_rows:
-            existing_candidates |= name_candidates(
-                row.get('db_name') or row.get('input_name', ''))
-
-        # Reverse SubHub index: candidate tuple -> pid
-        sh_candidate_idx = {}
-        for pid_str, proj in sh_idx.items():
-            for c in name_candidates(proj.get('customer_name', '')):
-                sh_candidate_idx.setdefault(c, pid_str)
-
-        print('Discovering new closes via closer sheet -> SubHub...')
-        for closer_key in closer_keys:
-            if closer_key in existing_candidates:
-                continue
-            sh_pid = sh_candidate_idx.get(closer_key)
-            if not sh_pid:
-                continue   # not in SubHub yet — silent skip
-            if sh_pid in known_pids:
-                continue   # already added by DCE pass under a different name spelling
-
-            proj    = sh_idx[sh_pid]
-            row_id  = next_row_id(raw_rows)
-            new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
-            raw_rows.append(new_row)
-            existing_candidates |= name_candidates(
-                new_row.get('db_name') or new_row.get('input_name', ''))
-            known_pids[sh_pid] = new_row
-
-            changelog.append({
-                'id':      row_id,
-                'pid':     new_row['pid'],
-                'name':    new_row['input_name'],
-                'closer':  new_row['closer'],
-                'ts':      ts + 'T00:00:00.000Z',
-                'changes': [{'field': 'NEW_DEAL', 'from': None, 'to': new_row['flag']}],
-                'note':    f'Auto-added from closer sheet {ts}',
-            })
-            closer_added += 1
-            print(f'  + New deal (closer sheet): {new_row["input_name"]} (pid={sh_pid})')
-
-        print(f'  {closer_added} new deals added (closer sheet)')
-
-    new_deals_added += closer_added
+    print(f'  {new_deals_added} new deals added')
 
     # ── 3. Save known_pids ────────────────────────────────────────────────────
     save_known_pids(set(str(r['pid']) for r in raw_rows))
@@ -574,14 +474,10 @@ def update():
     inject_line(lines, raw_idx, 'const RAW_ROWS = ', raw_rows)
     inject_line(lines, cl_idx,  'const CHANGELOG = ', changelog)
 
-    # Refresh BUILD_TS so user edits made before this build are treated as
-    # superseded by any APPROVED/Rejected status that just arrived from SubHub.
-    import time as _time
-    _build_ts = int(_time.time() * 1000)
-    for i, line in enumerate(lines):
-        if line.strip().startswith('const BUILD_TS ='):
-            lines[i] = f'const BUILD_TS = {_build_ts};\n'
-            break
+    # Rebuild the month-filter dropdown so newly-arrived months appear in the UI
+    joined = ''.join(lines)
+    joined = rebuild_month_dropdown(joined, raw_rows)
+    lines = joined.splitlines(keepends=True)
 
     save_html(lines)
     print(f'\nSaved report_out.html — {len(raw_rows)} rows, '
