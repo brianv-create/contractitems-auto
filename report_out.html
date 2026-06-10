@@ -226,13 +226,7 @@ tbody tr.hold-row td{opacity:.75}
 <div class="header">
   <h1>CONTRACT ITEMS &mdash; SubcontractorHub Milestones</h1>
   <div class="month-tag">&#128197; January &ndash; April 2026</div>
-  <div class="subtitle">
-    <span>Updated: Monday, Jun 8, 2026</span>
-    <span class="alert" id="hdr-rej">&#9888; 31 rejections</span>
-    &nbsp;|&nbsp;<span class="info">&#8987; 28 pending</span>
-    &nbsp;|&nbsp;<span class="good">&#10003; 135 fully approved</span>
-    &nbsp;|&nbsp;<span>200 total</span>
-  </div>
+
 </div>
 
 <div id="sticky-controls" style="position:sticky;top:0;z-index:20;background:#fff">
@@ -249,20 +243,7 @@ tbody tr.hold-row td{opacity:.75}
   <div class="stat-card stat-hold" id="card-hold" onclick="filterByFlag('on-hold')"><span class="num" id="cnt-hold">0</span><span>&#9208; On Hold</span></div>
 </div>
 
-<!-- DAILY GOAL PROGRESS BAR -->
-<div class="goal-bar-wrap" id="goal-bar-section">
-  <div class="goal-input-wrap">
-    <label>Daily Goal:</label>
-    <input type="number" class="goal-number-input" id="goal-target-input" min="0" placeholder="e.g. 50">
-    <button class="btn-set-goal" onclick="setDailyGoal()">Set</button>
-  </div>
-  <div class="goal-bar-label" id="goal-bar-label" style="display:none">Needs Attention</div>
-  <div class="goal-bar-track" id="goal-bar-track" style="display:none">
-    <div class="goal-bar-fill" id="goal-bar-fill"></div>
-    <div class="goal-bar-text" id="goal-bar-text"></div>
-  </div>
-  <div class="goal-bar-nums" id="goal-bar-nums" style="display:none"></div>
-</div>
+
 
 <div class="filters-bar">
   <div class="filter-group"><label>Search:</label><input type="text" id="search-name" placeholder="Name or email..." oninput="applyFilters()"></div>
@@ -305,7 +286,7 @@ tbody tr.hold-row td{opacity:.75}
   <button class="btn-toggle btn-approved on" id="btn-approved" onclick="toggleHideApproved()">&#10004; Show Approved</button>
   <button class="btn-toggle btn-cancelled" id="btn-cancelled" onclick="toggleCancelled()">&#128683; Show Cancelled</button>
   <button class="btn-toggle btn-hold" id="btn-hold" onclick="toggleHeld()">&#9208; Show On Hold</button>
-  <span id="sync-dot" title="Firebase sync status"><span class="dot"></span></span> <button class="btn-eod" onclick="openModal('eod')">&#128203; EOD Report</button>
+  <span id="sync-dot" title="Firebase sync status"><span class="dot"></span></span> 
   <button class="btn-eod" onclick="openHistory()" style="background:linear-gradient(135deg,#4f46e5,#7c3aed)">&#128337; History</button>
 </div>
 
@@ -1231,49 +1212,69 @@ function renderHistory() {
   const all = [
     ...CHANGELOG.map(e=>({...e, _src:'build'})),
     ...changelogManual.map(e=>({...e, _src:'manual'}))
-  ].sort((a,b)=>b.ts-a.ts);
+  ];
+  all.sort((a,b)=> new Date(b.ts).getTime() - new Date(a.ts).getTime());
 
   if (!all.length) {
-    document.getElementById('history-body').innerHTML = '<div style="color:#9ca3af;text-align:center;margin-top:40px">No history yet.<br>Changes will appear here after the next build or manual edit.</div>';
+    document.getElementById('history-body').innerHTML = '<div style="color:#9ca3af;text-align:center;margin-top:40px">No history yet.<br>Changes will appear here after the next workflow run.</div>';
     return;
   }
 
-  // Group by date string
+  // Group by exact ts — every entry from one workflow run shares a ts, so
+  // each group is one run. Most recent on top.
   const groups = {};
+  const order = [];
   all.forEach(e => {
-    const d = new Date(e.ts);
-    const key = (d.getMonth()+1)+'/'+d.getDate()+'/'+d.getFullYear();
-    if (!groups[key]) groups[key] = [];
+    const key = String(e.ts || '');
+    if (!groups[key]) { groups[key] = []; order.push(key); }
     groups[key].push(e);
   });
 
+  function fmtGroupHeader(tsKey) {
+    const d = new Date(tsKey);
+    if (isNaN(d.getTime())) return tsKey;
+    const date = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    return date + '  ·  ' + time;
+  }
+
+  function renderChange(field, fromVal, toVal) {
+    const fi = (typeof statusInfo === 'function') ? statusInfo(fromVal||'') : {label: fromVal||''};
+    const ti = (typeof statusInfo === 'function') ? statusInfo(toVal||'')   : {label: toVal  ||''};
+    return ' <span class="clog-field">' + escH(field) + '</span>' +
+           '<span class="clog-arrow">→</span>' +
+           (fromVal ? '<span class="clog-from">'+escH(fi.label)+'</span><span class="clog-arrow">→</span>' : '') +
+           '<span class="clog-to">'+escH(ti.label)+'</span>';
+  }
+
   let html2 = '';
-  Object.keys(groups).forEach(day => {
-    html2 += '<div class="clog-day">'+day+'</div>';
-    groups[day].forEach(e => {
-      const badge = e.type==='added'
-        ? '<span class="clog-badge clog-add">NEW</span>'
-        : e._src==='manual'
+  order.forEach(tsKey => {
+    html2 += '<div class="clog-day">' + fmtGroupHeader(tsKey) + '</div>';
+    groups[tsKey].forEach(e => {
+      const badge = (e._src==='manual')
         ? '<span class="clog-badge clog-manual">Manual</span>'
         : '<span class="clog-badge clog-build">Build</span>';
-      const time = e._src==='manual'
-        ? '<span class="clog-time">'+formatTs(e.ts)+'</span>'
-        : '';
-      const byTag = (e._src==='manual' && e.by) ? ' <span style="color:#6b7280;font-size:10px">by '+escH(e.by)+'</span>' : '';
-      if (e.type === 'added') {
-        html2 += '<div class="clog-entry">'+badge+
-          '<span><span class="clog-name">'+escH(e.name)+'</span>'+
-          ' <span class="clog-field">added</span>'+
-          (e.closer?' — <span style="color:#6366f1">'+escH(e.closer)+'</span>':'')+
-          byTag+'</span>'+time+'</div>';
-      } else {
-        html2 += '<div class="clog-entry">'+badge+
-          '<span><span class="clog-name">'+escH(e.name)+'</span>'+
-          ' <span class="clog-field">'+escH(e.field)+'</span>'+
-          '<span class="clog-arrow">→</span>'+
-          (e.from?'<span class="clog-from">'+escH(e.from)+'</span><span class="clog-arrow">→</span>':'')+
-          '<span class="clog-to">'+escH(e.to)+'</span>'+
-          byTag+'</span>'+time+'</div>';
+      const nameLine = '<span class="clog-name">' + escH(e.name||'') + '</span>' +
+                       (e.closer ? ' <span style="color:#6366f1;font-size:11px">('+escH(e.closer)+')</span>' : '');
+
+      const isNew = Array.isArray(e.changes) && e.changes.length === 1 && e.changes[0].field === 'NEW_DEAL';
+      if (isNew) {
+        html2 += '<div class="clog-entry"><span class="clog-badge clog-add">NEW</span>' +
+                 '<span>' + nameLine + ' <span class="clog-field">added</span></span></div>';
+        return;
+      }
+      if (Array.isArray(e.changes) && e.changes.length) {
+        e.changes.forEach(c => {
+          html2 += '<div class="clog-entry">' + badge + '<span>' + nameLine +
+                   renderChange(c.field, c.from, c.to) +
+                   '</span></div>';
+        });
+        return;
+      }
+      if (e.field) {
+        html2 += '<div class="clog-entry">' + badge + '<span>' + nameLine +
+                 renderChange(e.field, e.from, e.to) +
+                 '</span></div>';
       }
     });
   });

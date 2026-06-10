@@ -9,6 +9,7 @@ from datetime import datetime
 
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 REPORT_PATH  = os.path.join(SCRIPT_DIR, 'report_out.html')
+REPORT_DASHBOARD_PATH = os.path.join(SCRIPT_DIR, 'dashboard.html')
 SUBHUB_PATH  = os.path.join(SCRIPT_DIR, 'subhub_latest.json')
 DCE_CACHE    = os.path.join(SCRIPT_DIR, 'dce_cache.json')
 KNOWN_PIDS   = os.path.join(SCRIPT_DIR, 'known_pids.json')
@@ -131,12 +132,53 @@ def load_html():
     with open(REPORT_PATH, 'r', encoding='utf-8') as f:
         return f.readlines()
 
+def next_row_id(raw_rows):
+    used = {r.get('id') for r in raw_rows if isinstance(r.get('id'), int)}
+    nid = (max(used) if used else -1) + 1
+    while nid in used:
+        nid += 1
+    return nid
+
+def dedupe_row_ids(raw_rows):
+    seen = {}
+    fixed = 0
+    for row in raw_rows:
+        rid = row.get('id')
+        if rid in seen:
+            new_id = next_row_id(raw_rows)
+            row['id'] = new_id
+            seen[new_id] = row
+            fixed += 1
+        else:
+            seen[rid] = row
+    return fixed
+
+EXTRA_CLOSERS = ['David Mueller']
+EXTRA_MONTHS  = ['May 2026', 'June 2026']
+
+def rebuild_closer_dropdown(html_text, raw_rows):
+    closers = set()
+    for r in raw_rows:
+        c = (r.get('closer') or '').strip()
+        if c: closers.add(c)
+    closers.update(EXTRA_CLOSERS)
+    options = '<option value="">All Closers</option>' + ''.join(
+        f'<option value="{c}">{c}</option>' for c in sorted(closers, key=str.lower)
+    )
+    new_sel = f'<select id="filter-closer" onchange="applyFilters()">{options}</select>'
+    return re.sub(
+        r'<select id="filter-closer"[^>]*>.*?</select>',
+        new_sel, html_text, count=1, flags=re.DOTALL,
+    )
+
 def rebuild_month_dropdown(html_text, raw_rows):
     """Replace the <select id="filter-month"> options with the distinct months present in raw_rows."""
     months = set()
     for r in raw_rows:
         m = (r.get('month') or '').strip()
-        months.add(m if m else 'Unknown')
+        if m:
+            months.add(m)
+    months.update(EXTRA_MONTHS)
     MN = ['January','February','March','April','May','June',
           'July','August','September','October','November','December']
     def _key(m):
@@ -161,6 +203,8 @@ def rebuild_month_dropdown(html_text, raw_rows):
 
 def save_html(lines):
     with open(REPORT_PATH, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    with open(REPORT_DASHBOARD_PATH, 'w', encoding='utf-8') as f:
         f.writelines(lines)
 
 def extract_line(lines, prefix):
@@ -318,6 +362,9 @@ def update():
     cl_idx,  changelog = extract_line(lines, 'const CHANGELOG = ')
 
     print(f'  {len(raw_rows)} existing rows')
+    fixed = dedupe_row_ids(raw_rows)
+    if fixed:
+        print(f'  Renumbered {fixed} row(s) with duplicate id')
 
     print('Loading SubHub data…')
     subhub_data = load_subhub()
@@ -344,6 +391,7 @@ def update():
     known_pids = {str(r['pid']): r for r in raw_rows}
 
     ts = today_iso()
+    ts_precise = datetime.utcnow().isoformat() + 'Z'
     total_milestone_changes = 0
     total_link_enrichments  = 0
 
@@ -368,7 +416,7 @@ def update():
                 'pid':     row['pid'],
                 'name':    row.get('input_name', ''),
                 'closer':  row.get('closer', ''),
-                'ts':      ts + 'T00:00:00.000Z',
+                'ts':      ts_precise,
                 'changes': changes,
                 'note':    '',
             })
@@ -430,7 +478,7 @@ def update():
             continue
 
         proj    = sh_idx[sh_pid]
-        row_id  = len(raw_rows)
+        row_id  = next_row_id(raw_rows)
         new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
         raw_rows.append(new_row)
         existing_names.add(dce_name)
@@ -441,7 +489,7 @@ def update():
             'pid':     new_row['pid'],
             'name':    new_row['input_name'],
             'closer':  new_row['closer'],
-            'ts':      ts + 'T00:00:00.000Z',
+            'ts':      ts_precise,
             'changes': [{'field': 'NEW_DEAL', 'from': None, 'to': new_row['flag']}],
             'note':    f'Auto-added from DCE cache {ts}',
         })
@@ -477,6 +525,7 @@ def update():
     # Rebuild the month-filter dropdown so newly-arrived months appear in the UI
     joined = ''.join(lines)
     joined = rebuild_month_dropdown(joined, raw_rows)
+    joined = rebuild_closer_dropdown(joined, raw_rows)
     lines = joined.splitlines(keepends=True)
 
     save_html(lines)
