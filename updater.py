@@ -59,28 +59,32 @@ def fetch_closer_keys():
         if year != CLOSER_REQUIRED_YEAR:
             skipped_year += 1
             continue
-        parts = [p for p in re.split(r'\s+', r[1].strip().lower()) if p and p != '-']
-        if parts:
-            keys.add((parts[0], parts[-1]))
+        for c in name_candidates(r[1]):
+            keys.add(c)
     if skipped_year:
         print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
     return keys
 
 def name_candidates(name):
-    """(first, last)-style match tuples for a customer name, with the same
-    parenthetical/Jr/Ref noise stripping as in_closer_set."""
+    """(first, last) tuples for a customer name. All-pairs + reversed so
+    'Melonie Cogbill' pairs with 'K COGBILL TRUST MELONIE'. Strips trust/
+    LLC/family noise plus the usual Jr/Sr/Ref."""
     n = (name or '').strip()
     n = re.sub(r'\([^)]*\)', ' ', n)
     n = re.sub(r'[\-/,]', ' ', n)
-    NOISE = {'referral', 'ref', 'jr', 'sr', 'ii', 'iii', 'iv'}
+    NOISE = {'referral', 'ref', 'jr', 'sr', 'ii', 'iii', 'iv',
+             'trust', 'llc', 'family', 'estate', 'and', 'the'}
     parts = [re.sub(r'[^a-z]', '', p) for p in n.lower().split()]
     parts = [p for p in parts if p and p not in NOISE]
     if not parts:
         return set()
-    cands = {(parts[0], parts[-1])}
-    if len(parts) >= 2:
-        cands.add((parts[0], parts[1]))
-        cands.add((parts[-2], parts[-1]))
+    if len(parts) == 1:
+        return {(parts[0], parts[0])}
+    cands = set()
+    for i, a in enumerate(parts):
+        for b in parts[i+1:]:
+            cands.add((a, b))
+            cands.add((b, a))
     return cands
 
 def in_closer_set(name, closer_keys):
