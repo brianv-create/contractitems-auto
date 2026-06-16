@@ -140,6 +140,15 @@ def normalize_name(name):
     """Lowercase, strip extra spaces — for fuzzy matching."""
     return ' '.join(str(name or '').lower().split())
 
+def normalize_ghl_url(url):
+    """GHL URLs need '/contacts/detail/' between location and contact id —
+    without it the link 404s. Idempotent."""
+    if not url:
+        return url
+    if '/contacts/detail/' in url:
+        return url
+    return url.replace('/contacts/', '/contacts/detail/', 1)
+
 def today_month():
     now = datetime.now()
     return now.strftime('%B %Y')   # e.g. "April 2026"
@@ -334,7 +343,7 @@ def build_new_row(proj, dce_by_phone, dce_by_name, row_id):
     # DCE enrichment
     dce_entry = dce_by_phone.get(phone) or dce_by_name.get(normalize_name(proj.get('customer_name', ''))) or {}
     dce_url   = dce_entry.get('url', '')
-    ghl_url   = dce_entry.get('ghl_contact_url', '')
+    ghl_url   = normalize_ghl_url(dce_entry.get('ghl_contact_url', ''))
 
     email     = str(proj.get('email', '') or '').strip()
     closer    = str(proj.get('closer', '') or '').strip()
@@ -388,6 +397,17 @@ def update():
     cl_idx,  changelog = extract_line(lines, 'const CHANGELOG = ')
 
     print(f'  {len(raw_rows)} existing rows')
+    # Idempotent: any ghl_url still missing /contacts/detail/ gets fixed.
+    ghl_fixed = 0
+    for row in raw_rows:
+        u0 = row.get('ghl_url') or ''
+        if u0:
+            u1 = normalize_ghl_url(u0)
+            if u1 != u0:
+                row['ghl_url'] = u1
+                ghl_fixed += 1
+    if ghl_fixed:
+        print(f'  Fixed {ghl_fixed} GHL URL(s) missing /detail/')
     fixed = dedupe_row_ids(raw_rows)
     if fixed:
         print(f'  Renumbered {fixed} row(s) with duplicate id')
@@ -463,7 +483,7 @@ def update():
                     row['dce_url'] = dce_entry['url']
                     total_link_enrichments += 1
                 if not row.get('ghl_url') and dce_entry.get('ghl_contact_url'):
-                    row['ghl_url'] = dce_entry['ghl_contact_url']
+                    row['ghl_url'] = normalize_ghl_url(dce_entry['ghl_contact_url'])
 
     print(f'  {total_milestone_changes} milestone changes recorded')
     print(f'  {total_link_enrichments} DCE/GHL links enriched')
