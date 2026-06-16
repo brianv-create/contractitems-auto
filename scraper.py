@@ -72,6 +72,11 @@ def scrape():
                 projects += items
 
     print(f'  {len(projects)} projects found')
+    if projects:
+        sample_contact = (projects[0].get('contact') or {})
+        sample_keys = sorted(projects[0].keys())
+        print(f'  [debug] first project top-level keys: {sample_keys[:30]}...')
+        print(f'  [debug] first project contact keys:   {sorted(sample_contact.keys())}')
 
     # --- Fetch milestones per project ---
     results = []
@@ -123,6 +128,9 @@ def build_record(proj, headers):
             proj.get('state',''), proj.get('postal_code','')
         ])),
         'phone':    (proj.get('contact') or {}).get('phone_number', ''),
+        'email':    (proj.get('contact') or {}).get('email_address', '')
+                    or (proj.get('contact') or {}).get('email', '')
+                    or proj.get('email', ''),
         'stage':    proj.get('stage', ''),
         'job_stage': proj.get('stages', ''),
         'job_type': proj.get('job_type', ''),

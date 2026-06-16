@@ -38,8 +38,8 @@ CLOSER_SHEET_GID = '1352249267'   # tab: "Closed All"
 CLOSER_REQUIRED_YEAR = '2026'
 
 def fetch_closer_keys():
-    """Return set of (first, last) lowercase tuples from 'Their Full Name' column,
-    restricted to rows whose Timestamp (column 0) is in CLOSER_REQUIRED_YEAR."""
+    """Return ({(first,last) tuples}, {emails lowercased}) for the 'Their Full Name'
+    and 'Their Email' columns of the closer sheet (only current-year rows)."""
     url = f'https://docs.google.com/spreadsheets/d/{CLOSER_SHEET_ID}/gviz/tq?tqx=out:csv&gid={CLOSER_SHEET_GID}'
     try:
         with urllib.request.urlopen(url, timeout=30) as r:
@@ -49,6 +49,7 @@ def fetch_closer_keys():
         return None
     rows = list(csv.reader(io.StringIO(text)))
     keys = set()
+    emails = set()
     skipped_year = 0
     for r in rows[1:]:
         if len(r) < 2 or not r[1].strip():
@@ -61,9 +62,12 @@ def fetch_closer_keys():
             continue
         for c in name_candidates(r[1]):
             keys.add(c)
+        em = (r[2] if len(r) > 2 else '').strip().lower()
+        if em and '@' in em:
+            emails.add(em)
     if skipped_year:
         print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
-    return keys
+    return (keys, emails)
 
 def name_candidates(name):
     """(first, last) tuples for a customer name. All-pairs + reversed so
@@ -332,6 +336,7 @@ def build_new_row(proj, dce_by_phone, dce_by_name, row_id):
     dce_url   = dce_entry.get('url', '')
     ghl_url   = dce_entry.get('ghl_contact_url', '')
 
+    email     = str(proj.get('email', '') or '').strip()
     closer    = str(proj.get('closer', '') or '').strip()
     city      = ''
     addr      = proj.get('address', '')
@@ -348,7 +353,7 @@ def build_new_row(proj, dce_by_phone, dce_by_name, row_id):
         'pid':              int(pid) if pid.isdigit() else pid,
         'input_name':       name,
         'db_name':          name,
-        'email':            '',
+        'email':            email,
         'closer':           closer,
         'month':            today_month(),
         'url':              SUBHUB_BASE_URL + pid,
@@ -393,7 +398,8 @@ def update():
     print(f'  {len(sh_idx)} SubHub projects')
 
     print('Loading closer-tracking sheet…')
-    closer_keys = fetch_closer_keys()
+    _ck = fetch_closer_keys()
+    closer_keys, closer_emails = (_ck if _ck else (None, set()))
     if closer_keys is not None:
         print(f'  {len(closer_keys)} closed deals on the sheet')
         # Drop existing rows whose customer is no longer (or was never) a real closed deal
@@ -531,9 +537,13 @@ def update():
                 row.get('db_name') or row.get('input_name', ''))
 
         sh_candidate_idx = {}
+        sh_email_idx = {}
         for pid_str, proj in sh_idx.items():
             for c in name_candidates(proj.get('customer_name', '')):
                 sh_candidate_idx.setdefault(c, pid_str)
+            em = (proj.get('email') or '').strip().lower()
+            if em and '@' in em:
+                sh_email_idx.setdefault(em, pid_str)
 
         print('Discovering new closes via closer sheet -> SubHub...')
         for closer_key in closer_keys:
@@ -564,6 +574,33 @@ def update():
             })
             closer_added += 1
             print(f'  + New deal (closer sheet): {new_row["input_name"]} (pid={sh_pid})')
+
+        # ── 2c. Catch any closer-sheet entry whose SubHub record uses a
+        # different spelling but the same email ─────────────────────────────
+        existing_emails = {(r.get('email') or '').strip().lower() for r in raw_rows}
+        for em in closer_emails:
+            if em in existing_emails:
+                continue
+            sh_pid = sh_email_idx.get(em)
+            if not sh_pid:
+                continue
+            if sh_pid in known_pids:
+                continue
+            proj    = sh_idx[sh_pid]
+            row_id  = next_row_id(raw_rows)
+            new_row = build_new_row(proj, dce_by_phone, dce_by_name, row_id)
+            raw_rows.append(new_row)
+            existing_emails.add(em)
+            known_pids[sh_pid] = new_row
+            changelog.append({
+                'id': row_id, 'pid': new_row['pid'],
+                'name': new_row['input_name'], 'closer': new_row['closer'],
+                'ts': ts_precise,
+                'changes': [{'field': 'NEW_DEAL', 'from': None, 'to': new_row['flag']}],
+                'note': f'Auto-added from closer sheet (email match) {ts}',
+            })
+            closer_added += 1
+            print(f'  + New deal (email match): {new_row["input_name"]} (pid={sh_pid}, email={em})')
 
         print(f'  {closer_added} new deals added (closer sheet)')
 
