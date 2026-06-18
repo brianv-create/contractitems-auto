@@ -72,6 +72,44 @@ def scrape():
                 projects += items
 
     print(f'  {len(projects)} projects found')
+
+    # --- Also fetch /leads to catch deals that are in SubHub as leads/proposals
+    #     but not yet promoted to /projects. The closer sheet has these
+    #     entries first; we'd otherwise miss them for days.
+    leads = []
+    try:
+        rL = requests.get(
+            f'{API_BASE}/leads?page=1&limit=500&sorting_col=created_at&sorting_dir=desc',
+            headers=headers, timeout=60
+        )
+        if rL.ok:
+            dataL = rL.json()
+            leads = dataL.get('data', dataL) if isinstance(dataL, dict) else dataL
+            print(f'  {len(leads)} leads found via /leads')
+        else:
+            print(f'  /leads returned HTTP {rL.status_code} — skipping')
+    except Exception as e:
+        print(f'  /leads fetch failed ({e}) — skipping')
+
+    # Merge: append leads as project-shaped records (no project_id, no proposal_id)
+    # so they still appear in the closer-sheet matcher. Deduplicate by lead id.
+    seen_ids = {p.get('id') for p in projects if isinstance(p, dict)}
+    added = 0
+    for L in leads:
+        if not isinstance(L, dict): continue
+        lid = L.get('id')
+        if lid in seen_ids: continue
+        seen_ids.add(lid)
+        # Synthesize a project-shaped record from the lead. Most lead records
+        # have customer_name + contact info but no proposal_id yet.
+        L['_from_leads'] = True
+        if 'project_name' not in L and L.get('customer_name'):
+            L['project_name'] = L['customer_name']
+        projects.append(L)
+        added += 1
+    if added:
+        print(f'  Added {added} lead(s) not already in /projects')
+
     if projects:
         sample_contact = (projects[0].get('contact') or {})
         sample_keys = sorted(projects[0].keys())

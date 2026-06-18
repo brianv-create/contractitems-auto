@@ -69,10 +69,14 @@ def fetch_closer_keys():
         print(f'  ({skipped_year} closer-sheet rows skipped — not in {CLOSER_REQUIRED_YEAR})')
     return (keys, emails)
 
+def _stem(word):
+    """First 4 chars so 'steve' and 'steven' collapse to 'stev'. Catches
+    Mike/Michael, Pete/Peter, etc. nicknames."""
+    return word[:4] if len(word) > 4 else word
+
 def name_candidates(name):
-    """(first, last) tuples for a customer name. All-pairs + reversed so
-    'Melonie Cogbill' pairs with 'K COGBILL TRUST MELONIE'. Strips trust/
-    LLC/family noise plus the usual Jr/Sr/Ref."""
+    """(first, last) tuples for a customer name. All-pairs + reversed,
+    each token stemmed to 4 chars so nickname/full variants match."""
     n = (name or '').strip()
     n = re.sub(r'\([^)]*\)', ' ', n)
     n = re.sub(r'[\-/,]', ' ', n)
@@ -82,11 +86,12 @@ def name_candidates(name):
     parts = [p for p in parts if p and p not in NOISE]
     if not parts:
         return set()
-    if len(parts) == 1:
-        return {(parts[0], parts[0])}
+    stems = [_stem(p) for p in parts]
+    if len(stems) == 1:
+        return {(stems[0], stems[0])}
     cands = set()
-    for i, a in enumerate(parts):
-        for b in parts[i+1:]:
+    for i, a in enumerate(stems):
+        for b in stems[i+1:]:
             cands.add((a, b))
             cands.add((b, a))
     return cands
